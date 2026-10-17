@@ -1,0 +1,39 @@
+<!doctype html><html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Coin Tarayıcı</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#6b7280;--card:#f4f5f7;--line:#e2e4e8;--up:#0a8f4e;--dn:#d33;--ac:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#111418;--fg:#e8eaed;--mut:#9aa0a6;--card:#1b1f25;--line:#2a2f37;--up:#3ddc84;--dn:#ff6b6b;--ac:#6ea0ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif;padding:12px;padding-top:max(12px,env(safe-area-inset-top))}
+h1{font-size:18px;margin:0 0 4px}.mut{color:var(--mut);font-size:12px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:760px}
+th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{background:var(--card);cursor:pointer;font-size:12px;position:sticky;top:0}
+th:nth-child(2),td:nth-child(2),td:last-child,th:last-child{text-align:left}
+td:last-child{white-space:normal;min-width:220px;color:var(--mut);font-size:12px}
+a{color:var(--ac);text-decoration:none;font-weight:600}.up{color:var(--up)}.dn{color:var(--dn)}
+.s{display:inline-block;min-width:38px;padding:2px 6px;border-radius:6px;background:var(--card);font-weight:700}
+.warn{margin-top:12px;font-size:12px;color:var(--mut)}
+</style></head><body>
+<h1>Coin Tarayıcı</h1><div class="mut" id="upd">Yükleniyor…</div>
+<div class="bar"><input id="q" placeholder="Coin ara (BTC)"><label class="mut">Min skor <input id="m" type="number" value="0" min="0" max="100" style="width:64px"></label></div>
+<div class="wrap"><table><thead><tr id="h"></tr></thead><tbody id="b"></tbody></table></div>
+<p class="warn">Bu sayfa yatırım tavsiyesi değildir. Skor, kural tabanlı bir ön elemedir; yükseliş garantisi vermez. Başlığa dokunarak sıralayabilirsin.</p>
+<script>
+const C=[["#",null],["Coin","symbol"],["Fiyat","price"],["Skor","score"],["Tümü %","ch_all"],["1Y %","ch_1y"],["1A %","ch_1m"],["1G %","ch_1d"],["Hacim x","vol_ratio"],["RSI 4S","rsi4h"],["ATR %","atr"],["Geçen kriterler",null]];
+let D=[],key="score",dir=-1;
+const f=(v,d=2)=>v==null?"-":v.toLocaleString("tr-TR",{maximumFractionDigits:d});
+const pc=v=>v==null?"-":`<span class="${v>=0?"up":"dn"}">${v>0?"+":""}${f(v,1)}%</span>`;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function head(){h.innerHTML=C.map(([t,k])=>`<th ${k?`data-k="${k}"`:""}>${t}${k===key?(dir<0?" ▼":" ▲"):""}</th>`).join("");
+ h.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;dir=key===k?-dir:-1;key=k;render()})}
+function render(){head();const s=q.value.trim().toUpperCase(),m=+m_.value||0;
+ const L=D.filter(x=>x.symbol.includes(s)&&x.score>=m).sort((a,b)=>{const A=a[key]??-1e18,B=b[key]??-1e18;return (A>B?1:A<B?-1:0)*dir});
+ b.innerHTML=L.map((x,i)=>`<tr><td>${i+1}</td><td><a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=BINANCE:${esc(x.symbol)}USDT">${esc(x.symbol)}</a></td><td>${f(x.price,6)}</td><td><span class="s">${f(x.score,0)}</span></td><td>${pc(x.ch_all)}</td><td>${pc(x.ch_1y)}</td><td>${pc(x.ch_1m)}</td><td>${pc(x.ch_1d)}</td><td>${f(x.vol_ratio)}</td><td>${f(x.rsi4h,0)}</td><td>${f(x.atr)}</td><td>${x.why.map(esc).join(" · ")}</td></tr>`).join("")}
+const m_=document.getElementById("m");q.oninput=m_.oninput=render;
+fetch("data.json?"+Date.now()).then(r=>r.json()).then(j=>{D=j.items;
+ upd.textContent=j.updated?`Son güncelleme: ${new Date(j.updated).toLocaleString("tr-TR")} · ${j.count} coin`:"Henüz veri yok. Actions sekmesinden scan iş akışını çalıştır.";render()}).catch(()=>upd.textContent="Veri okunamadı");
+</script></body></html>
