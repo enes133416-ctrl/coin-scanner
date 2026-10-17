@@ -1,5 +1,5 @@
 """Binance USDT paritelerini çok zaman dilimli puanlar, docs/data.json üretir."""
-import json, time, datetime as dt
+import json, sys, time, datetime as dt
 from pathlib import Path
 import requests, numpy as np, pandas as pd
 
@@ -7,7 +7,32 @@ BASE = "https://data-api.binance.vision/api/v3"  # herkese açık veri, API anah
 MIN_VOL = 5_000_000   # 24 saatlik minimum USDT hacmi
 TOP_N = 150           # hacme göre ilk N coin analiz edilir
 MAX_24H = 20          # son 24 saatte bu yüzdeden fazla gitmiş coinleri ele
-STABLE = {"USDC","FDUSD","TUSD","USDP","DAI","EUR","TRY","BUSD","USDE","AEUR","XUSD","USD1","PYUSD","EURI"}
+STABLE = {"USDC","FDUSD","TUSD","USDP","DAI","EUR","TRY","BUSD","USDE","AEUR","XUSD","USD1","PYUSD","EURI","RLUSD","U"}
+
+
+TR_URLS = ["https://www.trbinance.com/open/v1/common/symbols",
+           "https://www.binance.tr/open/v1/common/symbols"]
+
+def tr_coins():
+    """Binance TR'de işlem gören coin kodları. Önce API, olmazsa tr_coins.txt."""
+    for u in TR_URLS:
+        try:
+            j = requests.get(u, timeout=20).json()
+            lst = j["data"]["list"]
+            out = set()
+            for x in lst:
+                b = x.get("baseAsset") or str(x.get("symbol", "")).split("_")[0]
+                if b: out.add(b.upper())
+            if len(out) > 20:
+                print("TR listesi API'den alındı:", len(out)); return out
+        except Exception as e:
+            print("TR API hatası", u, e)
+    f = Path(__file__).parent / "tr_coins.txt"
+    if f.exists():
+        out = {c.strip().upper() for c in f.read_text().replace(",", "\n").split() if c.strip()}
+        if out:
+            print("TR listesi tr_coins.txt'den alındı:", len(out)); return out
+    sys.exit("HATA: Binance TR listesi alınamadı. tr_coins.txt dosyası ekle.")
 
 def get(path, **p):
     for _ in range(3):
@@ -54,6 +79,8 @@ def analyze(sym):
     if any(x is None for x in (w, d, h4, h1)) or len(d) < 210 or len(h1) < 30:
         return None  # çok yeni coinler (<210 gün) atlanır
     p = d.c.iloc[-1]
+    if 0.9 < p < 1.1 and atr_pct(d).iloc[-1] < 0.6:
+        return None  # stablecoin
     sc, why = 0.0, []
 
     def chk(label, val, wt):
@@ -101,7 +128,9 @@ def analyze(sym):
 
 def main():
     tick = get("ticker/24hr") or []
+    tr = tr_coins()
     rows = [x for x in tick if x["symbol"].endswith("USDT")
+            and x["symbol"][:-4] in tr
             and x["symbol"][:-4] not in STABLE
             and float(x["quoteVolume"]) >= MIN_VOL
             and float(x["priceChangePercent"]) <= MAX_24H]
