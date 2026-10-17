@@ -4,6 +4,7 @@ from pathlib import Path
 import requests, numpy as np, pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
+from sklearn.inspection import permutation_importance
 
 BASE = "https://data-api.binance.vision/api/v3"
 TARGET, DAYS = 0.20, 7        # hedef: 7 gunde %20
@@ -11,8 +12,14 @@ TRAIN_N, MIN_VOL = 250, 2_000_000
 STABLE = {"USDC","FDUSD","TUSD","USDP","DAI","EUR","TRY","BUSD","USDE","AEUR","XUSD","USD1","PYUSD","EURI","RLUSD","U"}
 TR_URLS = ["https://www.trbinance.com/open/v1/common/symbols",
            "https://www.binance.tr/open/v1/common/symbols"]
-FEATS = ["r1","r5","r30","r90","r180","r365","ath_dd","hi365","lo365","rsi","e20","e50","e200",
-         "atr","vr","rv30","bbw_rank","brk20","maxup30","btc5","btc30"]
+STOP, FEE = 10.0, 0.2          # zarar kes %10, komisyon+kayma %0.2
+FL = {"r1":"1G getiri","r5":"5G getiri","r7":"7G getiri","r30":"1A getiri","r90":"3A getiri","r180":"6A getiri",
+      "r365":"1Y getiri","ath_dd":"ATH uzaklığı","hi365":"1Y zirve uzaklığı","lo365":"1Y dip üstü","rsi":"RSI",
+      "e20":"EMA20 farkı","e50":"EMA50 farkı","e200":"EMA200 farkı","atr":"Volatilite","vr":"Hacim artışı",
+      "rv30":"30G oynaklık","bbw_rank":"Bant sıkışması","brk20":"20G kırılım","maxup30":"30G en büyük gün",
+      "btc5":"BTC 5G","btc30":"BTC 30G","cpos":"Gün kapanış konumu","uw":"Üst fitil","body":"Gün mumu",
+      "up5":"Son 5G yeşil gün","rng5":"5G aralık","volz":"Hacim sapması","dd30":"30G zirveden düşüş","sl50":"EMA50 eğimi"}
+FEATS = list(FL)
 
 def tr_coins():
     for u in TR_URLS:
@@ -57,7 +64,7 @@ def atr_pct(df, n=14):
 
 def feats(d, btc):
     c, f = d.c, pd.DataFrame(index=d.index)
-    for n in (1, 5, 30, 90, 180, 365): f[f"r{n}"] = c.pct_change(n) * 100
+    for n in (1, 5, 7, 30, 90, 180, 365): f[f"r{n}"] = c.pct_change(n) * 100
     f["ath_dd"] = (c / d.h.cummax() - 1) * 100
     f["hi365"] = (c / d.h.rolling(365, min_periods=90).max() - 1) * 100
     f["lo365"] = (c / d.l.rolling(365, min_periods=90).min() - 1) * 100
@@ -71,8 +78,19 @@ def feats(d, btc):
     f["brk20"] = (c / d.h.shift(1).rolling(20).max() - 1) * 100
     f["maxup30"] = c.pct_change().rolling(30).max() * 100
     f["btc5"], f["btc30"] = btc["r5"].reindex(d.index), btc["r30"].reindex(d.index)
-    fut = d.h.rolling(DAYS).max().shift(-DAYS)
-    f["y"] = np.where(fut.notna(), (fut / c - 1 >= TARGET).astype(float), np.nan)
+    f["cpos"] = (c - d.l) / (d.h - d.l).replace(0, np.nan)
+    f["uw"] = (d.h - np.maximum(d.o, c)) / c * 100
+    f["body"] = (c - d.o) / d.o * 100
+    f["up5"] = (c.diff() > 0).rolling(5).sum()
+    f["rng5"] = (d.h.rolling(5).max() / d.l.rolling(5).min() - 1) * 100
+    f["volz"] = (d.v - d.v.rolling(30).mean()) / d.v.rolling(30).std()
+    f["dd30"] = (c / d.h.rolling(30).max() - 1) * 100
+    f["sl50"] = ema(c, 50).pct_change(10) * 100
+    fh, fl = d.h.rolling(DAYS).max().shift(-DAYS), d.l.rolling(DAYS).min().shift(-DAYS)
+    f["fh"], f["fl"] = (fh / c - 1) * 100, (fl / c - 1) * 100
+    f["c7"] = (c.shift(-DAYS) / c - 1) * 100
+    f["yu"] = np.where(fh.notna(), (f.fh >= TARGET * 100).astype(float), np.nan)
+    f["yd"] = np.where(fh.notna(), (f.fl <= -TARGET * 100).astype(float), np.nan)
     return f.replace([np.inf, -np.inf], np.nan)
 
 def mk():
@@ -94,35 +112,58 @@ def main():
         d = daily(s); time.sleep(0.1)
         if d is None or atr_pct(d).median() < 0.6: continue
         f = feats(d, btc); base = s[:-4]
-        frames.append(f.dropna(subset=["r90", "atr", "rsi", "y"]).assign(sym=base))
+        frames.append(f.dropna(subset=["r90", "atr", "rsi", "yu"]).assign(sym=base))
         if base in tr:
             last = f.iloc[-1]
             latest.append((base, d.c.iloc[-1], last, d.c.iloc[-1] / d.h.max() - 1))
-    data = pd.concat(frames)
-    tmax = data.index.max(); cut = tmax - 90 * 86400000
-    train, test = data[data.index < cut - 7 * 86400000], data[data.index >= cut]
-    m = mk().fit(train[FEATS], train.y)
-    p = m.predict_proba(test[FEATS])[:, 1]
-    thr = np.quantile(p, 0.95)
-    metrics = dict(base_rate=round(float(test.y.mean()) * 100, 2),
-                   auc=round(float(roc_auc_score(test.y, p)), 3),
-                   top5_hit=round(float(test.y[p >= thr].mean()) * 100, 2),
-                   test_rows=int(len(test)), coins=int(data.sym.nunique()))
+    data = pd.concat(frames); D = 86400000
+    tmax = data.index.max(); oos = []
+    for k in (180, 120, 60):             # ileri yürüyen test: model hiç görmediği dönemi tahmin eder
+        st = tmax - k * D
+        trn, te = data[data.index < st - 7 * D], data[(data.index >= st) & (data.index < st + 60 * D)]
+        mu, md = mk().fit(trn[FEATS], trn.yu), mk().fit(trn[FEATS], trn.yd)
+        oos.append(te.assign(pu=mu.predict_proba(te[FEATS])[:, 1], pdn=md.predict_proba(te[FEATS])[:, 1]))
+    oos = pd.concat(oos)
+    thr = np.quantile(oos.pu, 0.95)
+    t = oos[oos.sym.isin(tr)].copy(); t["day"] = t.index // D; t["sc"] = t.pu - t.pdn
+    t["ret"] = np.where(t.fl <= -STOP, -STOP, np.where(t.fh >= TARGET * 100, TARGET * 100, t.c7)) - FEE
+    pk = t.sort_values("sc", ascending=False).groupby("day").head(3)
+    metrics = dict(base_rate=round(float(oos.yu.mean()) * 100, 2), auc=round(float(roc_auc_score(oos.yu, oos.pu)), 3),
+                   top5_hit=round(float(oos.yu[oos.pu >= thr].mean()) * 100, 2),
+                   bt_trades=int(len(pk)), bt_win=round(float((pk.ret > 0).mean()) * 100, 1),
+                   bt_avg=round(float(pk.ret.mean()), 2), bt_bench=round(float(t.ret.mean()), 2),
+                   bt_target=round(float(((pk.fh >= TARGET * 100) & (pk.fl > -STOP)).mean()) * 100, 1),
+                   bt_stop=round(float((pk.fl <= -STOP).mean()) * 100, 1), coins=int(data.sym.nunique()))
     print(metrics)
-    m = mk().fit(data[FEATS], data.y)
-    items = []
+    sm = oos.sample(min(15000, len(oos)), random_state=0)
+    pi = permutation_importance(mu, sm[FEATS], sm.yu, scoring="roc_auc", n_repeats=2, random_state=0)
+    imp = sorted(zip(FEATS, pi.importances_mean), key=lambda z: -z[1])[:6]
+    r2 = lambda v: None if pd.isna(v) else round(float(v), 1)
+    up, dn = data[(data.yu == 1) & (data.yd == 0)], data[(data.yd == 1) & (data.yu == 0)]
+    prof = [dict(f=FL[k], up=r2(up[k].median()), down=r2(dn[k].median()), all=r2(data[k].median()))
+            for k in ["r7", "r30", "r90", "r365", "rsi", "vr", "atr", "dd30", "ath_dd"]]
+    lessons = dict(importance=[[FL[k], round(float(v), 4)] for k, v in imp], profile=prof,
+                   n_up=int(len(up)), n_down=int(len(dn)))
+    mu, md = mk().fit(data[FEATS], data.yu), mk().fit(data[FEATS], data.yd)
+    med = data[FEATS].median(); items = []
     for base, price, last, _ in latest:
-        x = last[FEATS].to_frame().T.astype(float)
-        if x[["r90", "atr", "rsi"]].isna().any(axis=None): continue
-        pr = float(m.predict_proba(x)[:, 1][0]) * 100
+        row = last[FEATS].astype(float)
+        if row[["r90", "atr", "rsi"]].isna().any(): continue
+        X = pd.DataFrame([row.values] * (len(FEATS) + 1), columns=FEATS)
+        for i, fn in enumerate(FEATS): X.loc[i, fn] = med[fn]
+        pu_all = mu.predict_proba(X)[:, 1]; pu0 = pu_all[-1]; dl = pu0 - pu_all[:-1]
+        order = np.argsort(dl)
+        why = [f"{FL[FEATS[i]]} {row.iloc[i]:.1f}" for i in order[::-1][:3] if dl[i] > 0]
+        risk = [f"{FL[FEATS[i]]} {row.iloc[i]:.1f}" for i in order[:2] if dl[i] < 0]
+        pdn = float(md.predict_proba(X.iloc[[-1]])[:, 1][0]) * 100
         g = lambda k: None if pd.isna(last[k]) else round(float(last[k]), 2)
-        items.append(dict(symbol=base, price=round(float(price), 8), prob=round(pr, 1),
-                          r1=g("r1"), r5=g("r5"), r30=g("r30"), r90=g("r90"), r180=g("r180"),
-                          r365=g("r365"), ath_dd=g("ath_dd"), rsi=g("rsi"), atr=g("atr")))
-    items.sort(key=lambda i: -i["prob"])
+        items.append(dict(symbol=base, price=round(float(price), 8), pu=round(pu0 * 100, 1), pdn=round(pdn, 1),
+                          score=round(pu0 * 100 - pdn, 1), why=why, risk=risk,
+                          r1=g("r1"), r5=g("r5"), r7=g("r7"), r30=g("r30"), r90=g("r90"), r180=g("r180"), r365=g("r365")))
+    items.sort(key=lambda i: -i["score"])
     out = Path(__file__).parent / "docs" / "data.json"
-    out.write_text(json.dumps({"updated": dt.datetime.now(dt.timezone.utc).isoformat(),
-                               "metrics": metrics, "target": int(TARGET*100), "days": DAYS,
+    out.write_text(json.dumps({"updated": dt.datetime.now(dt.timezone.utc).isoformat(), "metrics": metrics,
+                               "lessons": lessons, "target": int(TARGET * 100), "days": DAYS, "stop": STOP,
                                "items": items}, ensure_ascii=False))
     print(len(items), "coin yazildi")
 
