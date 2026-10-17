@@ -13,23 +13,26 @@ th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line);whit
 th{background:var(--card);cursor:pointer;font-size:12px}
 th:nth-child(2),td:nth-child(2){text-align:left}
 a{color:var(--ac);text-decoration:none;font-weight:600}.up{color:var(--up)}.dn{color:var(--dn)}
+td.w{white-space:normal;min-width:200px;text-align:left;font-size:12px;color:var(--mut)}
 .s{display:inline-block;min-width:48px;padding:2px 6px;border-radius:6px;background:var(--card);font-weight:700}
 </style></head><body>
 <h1>Coin Olasılık Tarayıcı</h1><div class="mut" id="upd">Yükleniyor…</div>
 <div class="box" id="met"></div>
+<div class="box" id="les"></div>
 <div class="wrap"><table><thead><tr id="h"></tr></thead><tbody id="b"></tbody></table></div>
 <p class="mut">Olasılık, geçmiş veriden öğrenen bir modelin tahminidir; kesinlik değildir. Yatırım tavsiyesi değildir.</p>
 <script>
-const C=[["#",null],["Coin","symbol"],["Olasılık","prob"],["Fiyat","price"],["1G","r1"],["5G","r5"],["1A","r30"],["3A","r90"],["6A","r180"],["1Y","r365"],["ATH'den","ath_dd"],["RSI","rsi"],["ATR%","atr"]];
-let D=[],key="prob",dir=-1;
+const C=[["#",null],["Coin","symbol"],["Skor","score"],["Yükseliş %","pu"],["Düşüş %","pdn"],["Fiyat","price"],["1G","r1"],["5G","r5"],["1A","r30"],["3A","r90"],["6A","r180"],["1Y","r365"],["Neden yüksek","why"],["Risk","risk"]];
+let D=[],key="score",dir=-1;
 const f=(v,d=2)=>v==null?"-":v.toLocaleString("tr-TR",{maximumFractionDigits:d});
 const pc=v=>v==null?"-":`<span class="${v>=0?"up":"dn"}">${v>0?"+":""}${f(v,1)}%</span>`;
-function render(){h.innerHTML=C.map(([t,k])=>`<th ${k?`data-k="${k}"`:""}>${t}${k===key?(dir<0?" ▼":" ▲"):""}</th>`).join("");
+function render(){h.innerHTML=C.map(([t,k])=>`<th ${k&&k!="why"&&k!="risk"?`data-k="${k}"`:""}>${t}${k===key?(dir<0?" ▼":" ▲"):""}</th>`).join("");
  h.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{const k=th.dataset.k;dir=key===k?-dir:-1;key=k;render()});
  const L=[...D].sort((a,b)=>((a[key]??-1e18)>(b[key]??-1e18)?1:-1)*dir);
- b.innerHTML=L.map((x,i)=>`<tr><td>${i+1}</td><td><a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=BINANCE:${x.symbol}USDT">${x.symbol}</a></td><td><span class="s">%${f(x.prob,1)}</span></td><td>${f(x.price,6)}</td><td>${pc(x.r1)}</td><td>${pc(x.r5)}</td><td>${pc(x.r30)}</td><td>${pc(x.r90)}</td><td>${pc(x.r180)}</td><td>${pc(x.r365)}</td><td>${pc(x.ath_dd)}</td><td>${f(x.rsi,0)}</td><td>${f(x.atr)}</td></tr>`).join("")}
-fetch("data.json?"+Date.now()).then(r=>r.json()).then(j=>{D=j.items;const m=j.metrics;
- upd.textContent=j.updated?`Son güncelleme: ${new Date(j.updated).toLocaleString("tr-TR")} · ${D.length} coin · Hedef: ${j.days} günde +%${j.target}`:"Henüz veri yok. Actions'tan scan'i çalıştır.";
- if(m)met.innerHTML=`<b>Model son 90 günde test edildi:</b><br>Rastgele bir coinin hedefe ulaşma oranı: <b>%${f(m.base_rate)}</b><br>Modelin en yüksek %5 tahmininde gerçek isabet: <b>%${f(m.top5_hit)}</b><br>AUC: <b>${f(m.auc,3)}</b> (0,5 = şans, 0,6+ = zayıf ama gerçek sinyal)<br><span class="mut">Üstteki iki oran birbirinden belirgin farklı değilse model işe yaramıyor demektir.</span>`;
+ b.innerHTML=L.map((x,i)=>`<tr><td>${i+1}</td><td><a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=BINANCE:${x.symbol}USDT">${x.symbol}</a></td><td><span class="s">${f(x.score,1)}</span></td><td class="up">%${f(x.pu,1)}</td><td class="dn">%${f(x.pdn,1)}</td><td>${f(x.price,6)}</td><td>${pc(x.r1)}</td><td>${pc(x.r5)}</td><td>${pc(x.r30)}</td><td>${pc(x.r90)}</td><td>${pc(x.r180)}</td><td>${pc(x.r365)}</td><td class="w">${x.why.join(" · ")}</td><td class="w">${x.risk.join(" · ")}</td></tr>`).join("")}
+fetch("data.json?"+Date.now()).then(r=>r.json()).then(j=>{D=j.items;const m=j.metrics,l=j.lessons;
+ upd.textContent=j.updated?`Son güncelleme: ${new Date(j.updated).toLocaleString("tr-TR")} · ${D.length} coin · ${j.days} günde +%${j.target} / -%${j.target}`:"Henüz veri yok. Actions'tan scan'i çalıştır.";
+ if(m)met.innerHTML=`<b>Kanıt: modelin hiç görmediği son 180 günde ileri yürüyen test</b><br>Rastgele coinin +%${j.target} yapma oranı: <b>%${f(m.base_rate)}</b> · Modelin en iyi %5 tahmini: <b>%${f(m.top5_hit)}</b> · AUC <b>${f(m.auc,3)}</b><br><br><b>İşlem simülasyonu</b> (Binance TR coinleri, her gün skoru en yüksek 3 coin, hedef +%${j.target}, zarar kes -%${j.stop}, komisyon dahil, ${f(m.bt_trades,0)} işlem):<br>Ortalama işlem getirisi: <b>${f(m.bt_avg)}%</b> · Rastgele seçim: <b>${f(m.bt_bench)}%</b><br>Kazanç oranı: <b>%${f(m.bt_win,1)}</b> · Hedefe ulaşan: <b>%${f(m.bt_target,1)}</b> · Zarar kese takılan: <b>%${f(m.bt_stop,1)}</b><br><span class="mut">Model rastgele seçimden net daha iyi değilse işe yaramıyor demektir.</span>`;
+ if(l)les.innerHTML=`<b>Geçmişten dersler</b> (${f(l.n_up,0)} yükseliş, ${f(l.n_down,0)} düşüş vakası)<br>Modelin en çok baktığı: ${l.importance.map(x=>x[0]).join(", ")}<br><br><b>Hafta başında medyan durum:</b><div class="wrap"><table style="min-width:0"><tr><th>Gösterge</th><th>Sonra +%20 yapanlar</th><th>Sonra -%20 yapanlar</th><th>Tüm</th></tr>${l.profile.map(p=>`<tr><td style="text-align:left">${p.f}</td><td class="up">${f(p.up,1)}</td><td class="dn">${f(p.down,1)}</td><td>${f(p.all,1)}</td></tr>`).join("")}</table></div>`;
  render()}).catch(()=>upd.textContent="Veri okunamadı");
 </script></body></html>
